@@ -49,10 +49,10 @@ async def __calculate_image_tiles(session: ClientSession, url: str, crop_x: int 
     # Get the image dimensions
     orig_y = crop_y if (crop_y is not None and crop_y >= 0 and crop_y < info['height']) else 0
     orig_x = crop_x if (crop_x is not None and crop_x >= 0 and crop_x < info['width']) else 0
-    corr_width = crop_width if (crop_width is not None and crop_width <= info['width']) else info['width']
-    width = orig_x + corr_width if orig_x + corr_width <= info['width'] else info['width']
-    corr_height = crop_height if (crop_height is not None and crop_height <= info['height']) else info['height']
-    height = orig_y + corr_height if orig_y + corr_height <= info['height'] else info['height']
+    corr_width = crop_width if crop_width is not None else info['width']
+    end_x = orig_x + corr_width if orig_x + corr_width <= info['width'] else info['width']
+    corr_height = crop_height if crop_height is not None else info['height']
+    end_y = orig_y + corr_height if orig_y + corr_height <= info['height'] else info['height']
 
     # Find the highest quality file the server supports
     format_info = [x for x in info['profile'] if 'formats' in x]
@@ -67,26 +67,26 @@ async def __calculate_image_tiles(session: ClientSession, url: str, crop_x: int 
                 else 'default.jpg'
 
     # Create a array with the URL and placement info for each tile
-    if 'tiles' in info and len(info['tiles']) > 0:
+    if 'tiles' in info and len(info['tiles']) > 0 and 'width' in info['tiles'][0] and 'height' in info['tiles'][0]:
         tile_width = info['tiles'][0]['width']
         tile_height = info['tiles'][0]['height']
         y = orig_y
         images = []
-        while y < height:
+        while y < end_y:
             x = orig_x
-            adj_height = min(tile_height, height - y)
-            while x < width:
-                adj_width = min(tile_width, width - x)
+            adj_height = min(tile_height, end_y - y)
+            while x < end_x:
+                adj_width = min(tile_width, end_x - x)
                 img_url = f'{url}/{int(x)},{int(y)},{int(adj_width)},{int(adj_height)}/full/0/{file_type}'
                 images.append(
                     {'url': img_url, 'x': x - orig_x, 'y': y - orig_y, 'width': adj_width, 'height': adj_height})
                 x = x + tile_width
 
             y = y + tile_height
-        return images, file_ext, orig_x, orig_y, width, height
+        return images, file_ext, orig_x, orig_y, corr_width, corr_height
 
     else:  # Return a single tile if the server doesn't support tiling
-        return [{'url': f'{url}/{orig_x},{orig_y},{corr_width},{corr_height}/full/0/{file_type}', 'x': orig_x, 'y': orig_y, 'width': corr_width, 'height': corr_height}], file_ext, orig_x, orig_y, width, height
+        return [{'url': f'{url}/{orig_x},{orig_y},{corr_width},{corr_height}/full/0/{file_type}', 'x': 0, 'y': 0, 'width': corr_width, 'height': corr_height}], file_ext, orig_x, orig_y, corr_width, corr_height
 
 
 async def __download_manager(url: str, x: int = None, y: int = None, width: int = None, height: int = None) -> ndarray:
@@ -94,11 +94,10 @@ async def __download_manager(url: str, x: int = None, y: int = None, width: int 
 
     async with aiohttp.ClientSession() as session:
         # Collect the tile data and initialize the necessary lists
-        tiles, file_ext, crop_start_x, crop_start_y, crop_end_x, crop_end_y = \
-            await __calculate_image_tiles(session, url, x, y, width, height)
+        tiles, _, _, _, corr_width, corr_height = await __calculate_image_tiles(session, url, x, y, width, height)
 
         # Fetch the tiles async
-        image_shape = (crop_end_y - crop_start_y, crop_end_x - crop_start_x, 3)
+        image_shape = (corr_height, corr_width, 3)
         image_tiles = np.empty(image_shape, dtype=np.uint8)
         tasks = []
         for image_details in tiles:
